@@ -1,0 +1,200 @@
+{
+  "enabled": {
+    "description": "启用插件",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后插件将停止工作"
+  },
+  "window_seconds": {
+    "description": "普通防抖等待窗口(秒)",
+    "type": "float",
+    "default": 3.0,
+    "hint": "同一个发送者连续消息进入防抖后，等待多少秒再放行该发送者最后一条事件"
+  },
+  "direct_trigger_window_seconds": {
+    "description": "直接呼唤Bot防抖窗口(秒)",
+    "type": "float",
+    "default": 1.5,
+    "hint": "消息包含@Bot或Bot别名时使用较短等待窗口，减少主动呼唤时的延迟"
+  },
+  "reset_timer": {
+    "description": "同一发送者新消息重置计时",
+    "type": "bool",
+    "default": true,
+    "hint": "开启时，同一个发送者每条新消息都会把该发送者的防抖窗口重新推迟；不同发送者互不影响"
+  },
+  "max_messages": {
+    "description": "同一发送者最大合并条数",
+    "type": "int",
+    "default": 5,
+    "hint": "同一个发送者达到此数量时无视等待窗口，立即合并并放行该发送者最后一条事件"
+  },
+  "first_message_no_debounce": {
+    "description": "冷场后首条消息不防抖",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，超过冷场判定时间后的下一条群消息直接放行；会牺牲首条与后续碎片的合并能力"
+  },
+  "idle_reset_seconds": {
+    "description": "冷场判定时间(秒)",
+    "type": "int",
+    "default": 120,
+    "hint": "同一群超过这个时间没有新消息，则认为进入冷场"
+  },
+  "merge_messages": {
+    "description": "合并同一发送者消息",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后只合并同一个发送者在窗口内的文本，不会合并不同群员的消息"
+  },
+  "include_sender_in_merged_text": {
+    "description": "合并文本保留发送者身份",
+    "type": "bool",
+    "default": true,
+    "hint": "同一发送者合并多条消息时，在注入文本里加入昵称和QQ号，避免LLM误判说话人"
+  },
+  "bot_aliases": {
+    "description": "Bot别名",
+    "type": "string",
+    "default": "anon,Anon,ANON,爱音,小爱音",
+    "hint": "用于判断直接呼唤Bot的别名，英文逗号分隔"
+  },
+  "bypass_command_prefixes": {
+    "description": "命令消息绕过前缀",
+    "type": "string",
+    "default": "/,!,！,#,＃,.,。",
+    "hint": "这些前缀开头的消息直接放行，避免管理命令被防抖拦截；用英文逗号分隔"
+  },
+  "buffer_expire_seconds": {
+    "description": "缓冲区过期时间(秒)",
+    "type": "int",
+    "default": 300,
+    "hint": "超过该时间的旧缓冲会被清理，防止脏数据残留"
+  },
+  "repeat_enabled": {
+    "description": "启用复读功能",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，群友连续复读同一句短文本时，Bot 可按概率跟着复读"
+  },
+  "repeat_mode": {
+    "description": "复读模式",
+    "type": "string",
+    "default": "chain",
+    "hint": "chain=群友复读后跟读；random=低概率随机复读；both=两种都启用"
+  },
+  "repeat_min_count": {
+    "description": "跟读触发人数/次数",
+    "type": "int",
+    "default": 2,
+    "hint": "连续多少个不同用户发送同一句后，Bot 才进入复读判定"
+  },
+  "repeat_probability": {
+    "description": "跟读概率",
+    "type": "float",
+    "default": 0.65,
+    "hint": "chain 模式触发后的复读概率，范围 0.0~1.0"
+  },
+  "repeat_cooldown_seconds": {
+    "description": "跟读冷却(秒)",
+    "type": "int",
+    "default": 90,
+    "hint": "同一群两次 chain 复读之间的最短间隔"
+  },
+  "repeat_min_text_length": {
+    "description": "最短复读文本长度",
+    "type": "int",
+    "default": 2,
+    "hint": "短于该长度的文本不复读"
+  },
+  "repeat_max_text_length": {
+    "description": "最长复读文本长度",
+    "type": "int",
+    "default": 24,
+    "hint": "长于该长度的文本不复读，避免复读大段内容"
+  },
+  "repeat_random_probability": {
+    "description": "随机复读概率",
+    "type": "float",
+    "default": 0.03,
+    "hint": "random 模式下，每条合格短文本触发随机复读的概率，建议很低"
+  },
+  "repeat_random_cooldown_seconds": {
+    "description": "随机复读冷却(秒)",
+    "type": "int",
+    "default": 180,
+    "hint": "同一群两次 random 复读之间的最短间隔"
+  },
+  "repeat_ignore_commands": {
+    "description": "复读忽略命令",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，命令前缀消息不会触发复读"
+  },
+  "repeat_ignore_at_bot": {
+    "description": "复读忽略@Bot消息",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，带 @Bot 的消息不会触发复读，避免影响正常提问"
+  },
+  "repeat_ignore_urls": {
+    "description": "复读忽略链接",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，包含 URL 或域名的消息不会触发复读"
+  },
+  "repeat_text_only": {
+    "description": "只复读纯文本",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，包含图片、语音、视频、文件、卡片、@ 等非纯文本组件的消息不会触发复读"
+  },
+  "repeat_ignore_self_message": {
+    "description": "忽略Bot自己的消息",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，忽略 Bot 自己发出的消息，防止自激循环"
+  },
+  "repeat_repeated_text_ttl_seconds": {
+    "description": "同文本复读记忆时间(秒)",
+    "type": "int",
+    "default": 600,
+    "hint": "同一句话被 Bot 复读后，在该时间内不会再次复读"
+  },
+  "repeat_enabled_groups": {
+    "description": "复读启用群白名单",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔群号；为空表示所有群都可启用复读"
+  },
+  "repeat_disabled_groups": {
+    "description": "复读禁用群黑名单",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔群号；这些群不会触发复读"
+  },
+  "repeat_debug": {
+    "description": "复读调试日志",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后输出复读判定细节，方便调参"
+  },
+  "debug_enabled": {
+    "description": "防抖诊断日志",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后输出非常详细的事件状态日志：进入、跳过、缓冲、取消、放行、注入、result、stop 状态。排查问题时打开，平时建议关闭"
+  },
+  "debug_include_message_text": {
+    "description": "诊断日志包含消息文本",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后诊断日志会显示消息文本预览；关闭后只显示长度和状态"
+  },
+  "debug_preview_chars": {
+    "description": "诊断日志文本预览长度",
+    "type": "int",
+    "default": 180,
+    "hint": "每段文本最多打印多少字符，避免日志过长"
+  }
+}
