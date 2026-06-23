@@ -22,7 +22,9 @@
 | `debounce_enabled_groups` | `""` | 防抖白名单；为空表示所有群。 |
 | `debounce_disabled_groups` | `""` | 防抖黑名单；优先于白名单。 |
 
-完整配置以 [_conf_schema.json](_conf_schema.json) 为准。复读配置仍可使用；但若同时使用 Heartflow，推荐保持 `heartflow_compat_mode=true`，由 Heartflow 负责主动发言。
+> **默认面向 Heartflow 共存。** `heartflow_compat_mode=true` 时，本插件的复读功能不会运行，即使 `repeat_enabled=true`。如果单独安装本插件并希望启用复读，请将 `heartflow_compat_mode` 设为 `false`。
+
+完整配置以 [_conf_schema.json](_conf_schema.json) 为准。与 Heartflow 同时使用时，推荐保持 `heartflow_compat_mode=true`，由 Heartflow 负责主动发言。
 
 ## 与 Heartflow 共存
 
