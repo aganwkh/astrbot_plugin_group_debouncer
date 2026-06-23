@@ -1,4 +1,4 @@
 name: astrbot_plugin_group_debouncer
 desc: 群聊发送者级连续消息防抖插件。只合并同一群内同一发送者短时间内的分段发言，避免不同群员消息互相覆盖；保留可配置群聊复读功能。
-version: 2.3.2-debug
+version: 2.4.0
 author: 虾仁 & anon

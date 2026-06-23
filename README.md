@@ -1,50 +1,42 @@
 # AstrBot 群聊连续消息防抖插件
 
-一个 AstrBot 插件，用于合并同一群聊内同一发送者短时间内连续发送的碎片消息，避免不同群员消息互相覆盖。
+这是一个发送者级碎片消息合并器：只合并同一群内、同一发送者在短时间内连续发送的文本。它不决定机器人是否回复；启用 Heartflow 时，Heartflow 只会接收到最终合并并放行的事件。
 
-## 功能特点
+## 安装
 
-- **发送者级防抖**：只合并同一个人在短时间内连续发送的碎片消息
-- **智能窗口调整**：普通消息和@Bot消息使用不同的防抖窗口
-- **群聊复读功能**：保留可配置的群聊复读功能，按群维度检测
-- **不干扰其他插件**：不修改 Heartflow 插件，在 GROUP_MESSAGE 阶段提前运行
-- **灵活配置**：支持启用/禁用、防抖窗口时间、复读阈值等配置
+将本目录放到 AstrBot 插件目录（例如 `/opt/AstrBot/data/plugins/`），重启 AstrBot 或通过插件管理页面重新加载。
 
-## 安装方法
+## 关键配置
 
-1. 将本插件放入 AstrBot 的插件目录：`/opt/AstrBot/data/plugins/`
-2. 重启 AstrBot 或使用插件管理命令加载插件
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `window_seconds` | `3.0` | 普通消息的防抖窗口。 |
+| `direct_trigger_window_seconds` | `1.5` | 明确 `@Bot` 或命中别名时的窗口。 |
+| `reset_timer` | `true` | 新消息从该消息时刻重新计算窗口。 |
+| `max_messages` | `5` | 达到条数后立即合并放行。 |
+| `inject_strategy` | `preserve_last_non_plain` | 合并文本时保留最后一条消息中的图片、@、表情等组件。 |
+| `strict_at_match` | `true` | 只把明确指向 Bot 的 At 视为 `@Bot`。 |
+| `heartflow_compat_mode` | `true` | 与 Heartflow 共用时禁用本插件复读和冷场首条直通，并强制严格 @ 匹配和保留最后非文本组件。 |
+| `cleanup_interval_seconds` | `300` | 状态清理检查间隔。 |
+| `inactive_state_ttl_seconds` | `1800` | 空闲状态回收时间。 |
+| `debounce_enabled_groups` | `""` | 防抖白名单；为空表示所有群。 |
+| `debounce_disabled_groups` | `""` | 防抖黑名单；优先于白名单。 |
 
-## 配置说明
+完整配置以 [_conf_schema.json](_conf_schema.json) 为准。复读配置仍可使用；但若同时使用 Heartflow，推荐保持 `heartflow_compat_mode=true`，由 Heartflow 负责主动发言。
 
-插件支持以下配置项：
+## 与 Heartflow 共存
 
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `enabled` | bool | `true` | 是否启用插件 |
-| `window_seconds` | float | `3.0` | 普通防抖等待窗口（秒） |
-| `direct_trigger_window_seconds` | float | `1.5` | @Bot 或直接呼唤时的较短防抖窗口（秒） |
-| `repeat_threshold` | int | `3` | 群聊复读触发阈值 |
-| `repeat_window_seconds` | float | `10.0` | 复读检测时间窗口（秒） |
+本插件在 `GROUP_MESSAGE` 阶段使用 priority `2000`；Heartflow 常用 priority 为 `1000`。因此，先由本插件合并同一人的碎片消息，旧事件会停止传播，随后 Heartflow 只判断最终事件。插件不会读取或修改 Heartflow 的内部状态。
 
-## 工作原理
+## 命令与组件
 
-1. **消息合并**：同一发送者在防抖窗口内的连续消息会被合并成一条
-2. **身份保留**：合并消息时保留发送者身份，避免混淆回复目标
-3. **复读检测**：复读功能按群维度检测，触发后直接发送原文，不进入LLM回复链路
+以 `/`、`!`、`！`、`#`、`＃` 开头的消息不防抖。默认的组件保留策略是 `preserve_last_non_plain`；如果需要旧行为可设置 `inject_strategy=plain_replace`，如果需要保留窗口内全部非文本组件可设置 `preserve_all_non_plain`。
 
-## 注意事项
+## 验收
 
-- 这是"发送者级碎片消息合并器"，不是群级总闸门
-- 外置插件无法精确知道 Heartflow 最后是否达到回复阈值，只能在进入后续链路前减少同一人的碎片触发
-- 复读功能不走 LLM，触发后直接发送原文，并阻止该事件继续进入后续 LLM 回复链路
+部署前请执行自动化测试，并按 [docs/testing.md](docs/testing.md) 完成至少一次群内手工验收。
 
-## 版本信息
+## 版本
 
-- 当前版本：v2.3.2-debug
-- 作者：虾仁 & anon
-- 兼容 AstrBot 版本：>=4.16
-
-## 许可证
-
-本插件为开源项目，遵循 MIT 许可证。
+- 当前版本：`2.4.0`
+- 兼容 AstrBot：`>=4.16`

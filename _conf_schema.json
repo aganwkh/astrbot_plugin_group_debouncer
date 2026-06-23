@@ -53,6 +53,24 @@
     "default": true,
     "hint": "同一发送者合并多条消息时，在注入文本里加入昵称和QQ号，避免LLM误判说话人"
   },
+  "inject_strategy": {
+    "description": "合并消息组件保留策略",
+    "type": "string",
+    "default": "preserve_last_non_plain",
+    "hint": "plain_replace=只保留文本；preserve_last_non_plain=保留最后一条消息的图片、@等组件（推荐）；preserve_all_non_plain=保留窗口内所有非文本组件"
+  },
+  "strict_at_match": {
+    "description": "严格匹配@Bot",
+    "type": "bool",
+    "default": true,
+    "hint": "仅在能够确认 At 组件目标就是 Bot 时才使用直接呼唤的短窗口，避免把 @其他群友误判为 @Bot"
+  },
+  "heartflow_compat_mode": {
+    "description": "Heartflow 兼容模式",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后关闭本插件复读，并禁止冷场首条直通，让 Heartflow 只看到合并后的稳定事件"
+  },
   "bot_aliases": {
     "description": "Bot别名",
     "type": "string",
@@ -62,7 +80,7 @@
   "bypass_command_prefixes": {
     "description": "命令消息绕过前缀",
     "type": "string",
-    "default": "/,!,！,#,＃,.,。",
+    "default": "/,!,！,#,＃",
     "hint": "这些前缀开头的消息直接放行，避免管理命令被防抖拦截；用英文逗号分隔"
   },
   "buffer_expire_seconds": {
@@ -70,6 +88,30 @@
     "type": "int",
     "default": 300,
     "hint": "超过该时间的旧缓冲会被清理，防止脏数据残留"
+  },
+  "cleanup_interval_seconds": {
+    "description": "状态清理检查间隔(秒)",
+    "type": "int",
+    "default": 300,
+    "hint": "定期检查并回收空闲群和发送者的状态；不会回收仍在使用的锁"
+  },
+  "inactive_state_ttl_seconds": {
+    "description": "空闲状态保留时间(秒)",
+    "type": "int",
+    "default": 1800,
+    "hint": "超过该时间没有消息的发送者和群状态会被回收，避免长期运行后内存逐渐增长"
+  },
+  "debounce_enabled_groups": {
+    "description": "防抖启用群白名单",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔群 sid；为空表示所有群都启用防抖"
+  },
+  "debounce_disabled_groups": {
+    "description": "防抖禁用群黑名单",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔群 sid；黑名单优先于白名单"
   },
   "repeat_enabled": {
     "description": "启用复读功能",
@@ -188,7 +230,7 @@
   "debug_include_message_text": {
     "description": "诊断日志包含消息文本",
     "type": "bool",
-    "default": true,
+    "default": false,
     "hint": "开启后诊断日志会显示消息文本预览；关闭后只显示长度和状态"
   },
   "debug_preview_chars": {

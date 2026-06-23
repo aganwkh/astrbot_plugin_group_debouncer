@@ -86,13 +86,28 @@ class DebouncerConfig(BaseModel):
         description="合并多条消息时是否在注入文本中保留发送者身份",
     )
 
+    inject_strategy: str = Field(
+        default="preserve_last_non_plain",
+        description="合并消息注入策略：plain_replace、preserve_last_non_plain、preserve_all_non_plain",
+    )
+
+    strict_at_match: bool = Field(
+        default=True,
+        description="仅在能够确认 At 组件目标为 Bot 时才认定为 @Bot",
+    )
+
+    heartflow_compat_mode: bool = Field(
+        default=True,
+        description="与 Heartflow 共用时使用保守的防抖和复读策略",
+    )
+
     bot_aliases: str = Field(
         default="anon,Anon,ANON,爱音,小爱音",
         description="用于判断直接呼唤 Bot 的别名，逗号分隔",
     )
 
     bypass_command_prefixes: str = Field(
-        default="/,!,！,#,＃,.,。",
+        default="/,!,！,#,＃",
         description="这些前缀开头的消息直接放行，逗号分隔",
     )
 
@@ -101,6 +116,30 @@ class DebouncerConfig(BaseModel):
         description="缓冲区最大保留时间，单位秒",
         ge=30,
         le=3600,
+    )
+
+    cleanup_interval_seconds: int = Field(
+        default=300,
+        description="状态清理检查间隔，单位秒",
+        ge=10,
+        le=3600,
+    )
+
+    inactive_state_ttl_seconds: int = Field(
+        default=1800,
+        description="空闲状态保留时长，单位秒",
+        ge=60,
+        le=86400,
+    )
+
+    debounce_enabled_groups: str = Field(
+        default="",
+        description="仅在哪些群启用防抖，逗号分隔；为空表示所有群",
+    )
+
+    debounce_disabled_groups: str = Field(
+        default="",
+        description="禁用防抖的群号，逗号分隔",
     )
 
     # ===== 复读功能配置 =====
@@ -191,7 +230,7 @@ class DebouncerConfig(BaseModel):
     )
 
     debug_include_message_text: bool = Field(
-        default=True,
+        default=False,
         description="诊断日志是否包含消息文本预览。关闭后只打印长度和状态，避免日志过长或泄露内容",
     )
 
@@ -210,6 +249,8 @@ class MessageBuffer:
         self.sender_name = sender_name or sender_id
         self.messages: List[str] = []
         self.components: List[object] = []
+        self.last_components: List[object] = []
+        self.all_non_plain_components: List[object] = []
         self.last_update: float = 0.0
         self.target_time: float = 0.0
         self.direct_trigger: bool = False
@@ -227,15 +268,18 @@ class MessageBuffer:
         self.direct_trigger = self.direct_trigger or direct_trigger
 
         # 收集非纯文本组件，但默认只把文本合并注入。
-        for c in comps:
-            if not isinstance(c, Plain):
-                self.components.append(c)
+        non_plain_components = [c for c in comps if not isinstance(c, Plain)]
+        self.components.extend(non_plain_components)
+        self.last_components = non_plain_components
+        self.all_non_plain_components.extend(non_plain_components)
 
         self.last_update = now
 
     def clear(self):
         self.messages.clear()
         self.components.clear()
+        self.last_components.clear()
+        self.all_non_plain_components.clear()
         self.last_update = 0.0
         self.target_time = 0.0
         self.direct_trigger = False
@@ -293,9 +337,12 @@ class GroupDebouncer(Star):
         self.last_group_message_time: Dict[str, float] = {}
         self.repeat_states: Dict[str, RepeatState] = {}
         self.repeat_locks: Dict[str, asyncio.Lock] = {}
+        self.key_last_seen: Dict[str, float] = {}
+        self.session_last_seen: Dict[str, float] = {}
+        self.last_cleanup_at: float = 0.0
 
         logger.info(
-            f"[GroupDebouncer] V2.3.2-debug 初始化完成，模式=GROUP_MESSAGE 发送者级防抖，配置: {self.config}"
+            f"[GroupDebouncer] V2.4.0 初始化完成，模式=GROUP_MESSAGE 发送者级防抖，配置: {self.config}"
         )
 
     def _get_session_id(self, event: AstrMessageEvent) -> str:
@@ -394,14 +441,30 @@ class GroupDebouncer(Star):
     def _is_bypass_message(self, text: str) -> bool:
         return any(text.startswith(prefix) for prefix in self._get_command_prefixes())
 
-    def _inject_merged_text(self, event: AstrMessageEvent, merged_text: str):
+    def _update_target_time(self, buffer: MessageBuffer, now: float, window_seconds: float):
+        if buffer.target_time <= 0 or self.config.reset_timer:
+            buffer.target_time = now + window_seconds
+
+    def _inject_merged_text(
+        self,
+        event: AstrMessageEvent,
+        merged_text: str,
+        buffer: Optional[MessageBuffer] = None,
+    ):
         if not merged_text:
             return
 
         event.message_str = merged_text
 
         try:
-            event.message_obj.message = [Plain(merged_text)]
+            strategy = self._effective_inject_strategy()
+            if strategy == "preserve_all_non_plain" and buffer is not None:
+                non_plain_components = buffer.all_non_plain_components
+            elif strategy == "preserve_last_non_plain" and buffer is not None:
+                non_plain_components = buffer.last_components
+            else:
+                non_plain_components = []
+            event.message_obj.message = [Plain(merged_text), *non_plain_components]
         except Exception as e:
             logger.warning(f"[GroupDebouncer] 注入合并消息链失败: {e}")
 
@@ -424,6 +487,14 @@ class GroupDebouncer(Star):
 
         return None
 
+    def _effective_inject_strategy(self) -> str:
+        if self.config.heartflow_compat_mode:
+            return "preserve_last_non_plain"
+        return self.config.inject_strategy
+
+    def _strict_at_matching_enabled(self) -> bool:
+        return self.config.heartflow_compat_mode or self.config.strict_at_match
+
     def _has_non_plain_component(self, event: AstrMessageEvent) -> bool:
         try:
             comps = event.message_obj.message or []
@@ -444,7 +515,9 @@ class GroupDebouncer(Star):
             if name != "at":
                 continue
             value = getattr(c, "qq", None) or getattr(c, "target", None) or getattr(c, "user_id", None)
-            if self_id is None or value is None or str(value) == self_id:
+            if self_id is not None and value is not None and str(value) == self_id:
+                return True
+            if not self._strict_at_matching_enabled():
                 return True
 
         return self_id is not None and (f"@{self_id}" in text)
@@ -475,6 +548,47 @@ class GroupDebouncer(Star):
         if enabled_groups and session_id not in enabled_groups:
             return False
         return True
+
+    def _debounce_group_allowed(self, session_id: str) -> bool:
+        enabled_groups = self._parse_csv_set(self.config.debounce_enabled_groups)
+        disabled_groups = self._parse_csv_set(self.config.debounce_disabled_groups)
+        if session_id in disabled_groups:
+            return False
+        return not enabled_groups or session_id in enabled_groups
+
+    def _should_attempt_repeat(self) -> bool:
+        return not self.config.heartflow_compat_mode
+
+    def _should_bypass_first_message(self) -> bool:
+        return self.config.first_message_no_debounce and not self.config.heartflow_compat_mode
+
+    def _cleanup_states(self, now: float):
+        if now - self.last_cleanup_at < self.config.cleanup_interval_seconds:
+            return
+        self.last_cleanup_at = now
+        ttl = self.config.inactive_state_ttl_seconds
+
+        for key, last_seen in list(self.key_last_seen.items()):
+            if now - last_seen <= ttl:
+                continue
+            lock = self.locks.get(key)
+            if lock is not None and lock.locked():
+                continue
+            self.buffers.pop(key, None)
+            self.counters.pop(key, None)
+            self.locks.pop(key, None)
+            self.key_last_seen.pop(key, None)
+
+        for session_id, last_seen in list(self.session_last_seen.items()):
+            if now - last_seen <= ttl:
+                continue
+            lock = self.repeat_locks.get(session_id)
+            if lock is not None and lock.locked():
+                continue
+            self.last_group_message_time.pop(session_id, None)
+            self.repeat_states.pop(session_id, None)
+            self.repeat_locks.pop(session_id, None)
+            self.session_last_seen.pop(session_id, None)
 
     def _repeat_candidate_allowed(self, event: AstrMessageEvent, session_id: str, text: str) -> bool:
         if not self.config.repeat_enabled:
@@ -756,23 +870,28 @@ class GroupDebouncer(Star):
         sender_name = self._get_sender_name(event, sender_id)
         debounce_key = self._get_debounce_key(session_id, sender_id)
         now = time.time()
+        self.key_last_seen[debounce_key] = now
+        self.session_last_seen[session_id] = now
+        self._cleanup_states(now)
         self._debug_event_snapshot("identity_resolved", event, session_id=session_id, sender_id=sender_id, sender_name=sender_name, key=debounce_key)
 
+        if not self._debounce_group_allowed(session_id):
+            self._debug_event_snapshot("bypass_debounce_group", event, session_id=session_id)
+            return
+
         # 复读按群维度判断，需要跨 sender 检测；但不参与 LLM 防抖缓冲。
-        async with self._get_repeat_lock(session_id):
-            repeat_text = self._try_build_repeat_response(event, session_id, text, now)
-            if repeat_text:
-                logger.info(
-                    f"[GroupDebouncer:Repeat] session={session_id}, sender={sender_id}, 触发复读 | text={repeat_text[:60]!r}"
-                )
-                self._debug_event_snapshot("repeat_before_yield", event, repeat_text=repeat_text)
-                # 先产出复读结果，再停止事件传播。
-                # 避免 stop_event 状态被后续 result 设置/清理流程冲掉。
-                yield event.plain_result(repeat_text)
-                self._debug_event_snapshot("repeat_after_yield_before_stop", event, repeat_text=repeat_text)
-                event.stop_event()
-                self._debug_event_snapshot("repeat_after_stop", event, repeat_text=repeat_text)
-                return
+        if self._should_attempt_repeat():
+            async with self._get_repeat_lock(session_id):
+                repeat_text = self._try_build_repeat_response(event, session_id, text, now)
+                if repeat_text:
+                    logger.info(
+                        f"[GroupDebouncer:Repeat] session={session_id}, sender={sender_id}, 触发复读 | text={repeat_text[:60]!r}"
+                    )
+                    self._debug_event_snapshot("repeat_before_yield", event, repeat_text=repeat_text)
+                    yield event.plain_result(repeat_text)
+                    event.stop_event()
+                    self._debug_event_snapshot("repeat_after_stop", event, repeat_text=repeat_text)
+                    return
 
         lock = self._get_lock(debounce_key)
 
@@ -783,7 +902,7 @@ class GroupDebouncer(Star):
 
             # 冷场后的第一条消息是否直通由配置决定。
             # 若开启，它会牺牲“首条+后续碎片”的合并能力，换取冷场后更快响应。
-            if self.config.first_message_no_debounce and idle_gap >= self.config.idle_reset_seconds:
+            if self._should_bypass_first_message() and idle_gap >= self.config.idle_reset_seconds:
                 self._clear_session_debounce_buffers(session_id)
                 logger.info(
                     f"[GroupDebouncer] session={session_id}, sender={sender_id}, 冷场 {idle_gap:.1f}s 后首条群消息，直接放行"
@@ -812,11 +931,7 @@ class GroupDebouncer(Star):
             current_id = self.counters.get(debounce_key, 0) + 1
             self.counters[debounce_key] = current_id
 
-            if not buffer.target_time or not self.config.reset_timer:
-                if not buffer.target_time:
-                    buffer.target_time = now + window_seconds
-            else:
-                buffer.target_time = now + window_seconds
+            self._update_target_time(buffer, now, window_seconds)
 
             target_time = buffer.target_time
             current_count = len(buffer.messages)
@@ -839,15 +954,15 @@ class GroupDebouncer(Star):
             if current_count >= self.config.max_messages:
                 merged_text = buffer.get_full_text(self.config.include_sender_in_merged_text)
                 merged_count = len(buffer.messages)
-                buffer.clear()
-                self.buffers.pop(debounce_key, None)
                 logger.info(
                     f"[GroupDebouncer] key={debounce_key}, 达最大条数 {self.config.max_messages}，立即放行 | "
                     f"merged_count={merged_count} | preview={merged_text[:80]!r}"
                 )
                 self._debug_event_snapshot("max_messages_before_inject", event, merged_count=merged_count, merged_text=merged_text)
                 if self.config.merge_messages:
-                    self._inject_merged_text(event, merged_text)
+                    self._inject_merged_text(event, merged_text, buffer)
+                buffer.clear()
+                self.buffers.pop(debounce_key, None)
                 self._debug_event_snapshot("max_messages_release", event, merged_count=merged_count)
                 return
 
@@ -881,12 +996,12 @@ class GroupDebouncer(Star):
             merged_text = buffer.get_full_text(self.config.include_sender_in_merged_text)
             merged_count = len(buffer.messages)
             merged_direct = buffer.direct_trigger
-            buffer.clear()
-            self.buffers.pop(debounce_key, None)
 
             self._debug_event_snapshot("release_before_inject", event, merged_count=merged_count, merged_direct=merged_direct, merged_text=merged_text)
             if self.config.merge_messages and merged_text:
-                self._inject_merged_text(event, merged_text)
+                self._inject_merged_text(event, merged_text, buffer)
+            buffer.clear()
+            self.buffers.pop(debounce_key, None)
             self._debug_event_snapshot("release_after_inject", event, merged_count=merged_count, merged_direct=merged_direct)
 
             logger.info(

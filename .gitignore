@@ -1,0 +1,6 @@
+.venv/
+.local/
+__pycache__/
+*.py[cod]
+.coverage
+coverage.xml
