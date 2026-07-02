@@ -270,7 +270,8 @@ class MessageBuffer:
         # 收集非纯文本组件，但默认只把文本合并注入。
         non_plain_components = [c for c in comps if not isinstance(c, Plain)]
         self.components.extend(non_plain_components)
-        self.last_components = non_plain_components
+        if non_plain_components:
+            self.last_components = non_plain_components
         self.all_non_plain_components.extend(non_plain_components)
 
         self.last_update = now
@@ -557,7 +558,7 @@ class GroupDebouncer(Star):
         return not enabled_groups or session_id in enabled_groups
 
     def _should_attempt_repeat(self) -> bool:
-        return not self.config.heartflow_compat_mode
+        return self.config.repeat_enabled
 
     def _should_bypass_first_message(self) -> bool:
         return self.config.first_message_no_debounce and not self.config.heartflow_compat_mode
@@ -853,9 +854,10 @@ class GroupDebouncer(Star):
         raw_text = event.message_str or ""
         text = raw_text.strip()
         self._debug_event_snapshot("event_enter", event, raw_len=len(raw_text), stripped_len=len(text))
+        has_non_plain_component = self._has_non_plain_component(event)
 
-        # 空文本/纯图片消息不处理，避免误伤图片类插件。
-        if not text:
+        # 空文本且无组件的消息不处理；纯图片/表情先暂存，给同一人后续文字带给 Heartflow。
+        if not text and not has_non_plain_component:
             self._debug_event_snapshot("skip_empty_or_non_text", event)
             return
 
@@ -877,6 +879,12 @@ class GroupDebouncer(Star):
 
         if not self._debounce_group_allowed(session_id):
             self._debug_event_snapshot("bypass_debounce_group", event, session_id=session_id)
+            return
+
+        if not text:
+            buffer = self._get_buffer(debounce_key, session_id, sender_id, sender_name)
+            buffer.add("", event.message_obj.message, self.config.buffer_expire_seconds, sender_name, False)
+            self._debug_buffer_snapshot("buffer_non_text_component", debounce_key, buffer)
             return
 
         # 复读按群维度判断，需要跨 sender 检测；但不参与 LLM 防抖缓冲。

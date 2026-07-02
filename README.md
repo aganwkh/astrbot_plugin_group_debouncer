@@ -16,13 +16,13 @@
 | `max_messages` | `5` | 达到条数后立即合并放行。 |
 | `inject_strategy` | `preserve_last_non_plain` | 合并文本时保留最后一条消息中的图片、@、表情等组件。 |
 | `strict_at_match` | `true` | 只把明确指向 Bot 的 At 视为 `@Bot`。 |
-| `heartflow_compat_mode` | `true` | 与 Heartflow 共用时禁用本插件复读和冷场首条直通，并强制严格 @ 匹配和保留最后非文本组件。 |
+| `heartflow_compat_mode` | `true` | 与 Heartflow 共用时禁用冷场首条直通，并强制严格 @ 匹配和保留最后非文本组件。复读是否启用只看 `repeat_enabled`。 |
 | `cleanup_interval_seconds` | `300` | 状态清理检查间隔。 |
 | `inactive_state_ttl_seconds` | `1800` | 空闲状态回收时间。 |
 | `debounce_enabled_groups` | `""` | 防抖白名单；为空表示所有群。 |
 | `debounce_disabled_groups` | `""` | 防抖黑名单；优先于白名单。 |
 
-> **默认面向 Heartflow 共存。** `heartflow_compat_mode=true` 时，本插件的复读功能不会运行，即使 `repeat_enabled=true`。如果单独安装本插件并希望启用复读，请将 `heartflow_compat_mode` 设为 `false`。
+> **复读开关以 `repeat_enabled` 为准。** `heartflow_compat_mode=true` 不再禁用复读；如果不希望本插件复读，请将 `repeat_enabled` 设为 `false`。
 
 完整配置以 [_conf_schema.json](_conf_schema.json) 为准。与 Heartflow 同时使用时，推荐保持 `heartflow_compat_mode=true`，由 Heartflow 负责主动发言。
 
@@ -40,5 +40,5 @@
 
 ## 版本
 
-- 当前版本：`2.4.0`
+- 当前版本：`2.4.1`
 - 兼容 AstrBot：`>=4.16`

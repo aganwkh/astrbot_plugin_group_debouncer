@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.1 - 2026-07-02
+
+- Fixed repeat handling so `repeat_enabled=true` works even when `heartflow_compat_mode=true`.
+- Preserved pure image/non-text components when the same sender follows them with text.
+
 ## 2.4.0 - 2026-06-23
 
 - Fixed `reset_timer` so a sender's debounce window starts from their newest message.

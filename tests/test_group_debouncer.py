@@ -28,9 +28,41 @@ class Message:
 
 
 class Event:
-    def __init__(self, components, self_id=None):
+    def __init__(self, components, self_id=None, text="", session_id="group", sender_id="sender"):
         self.message_obj = Message(components, self_id=self_id)
-        self.message_str = ""
+        self.message_obj.session_id = session_id
+        self.message_obj.sender_id = sender_id
+        self.message_str = text
+        self.unified_msg_origin = session_id
+        self._sender_id = sender_id
+        self.stopped = False
+
+    def is_private_chat(self):
+        return False
+
+    def get_sender_id(self):
+        return self._sender_id
+
+    def get_sender_name(self):
+        return "Sender"
+
+    def get_self_id(self):
+        return "bot"
+
+    def stop_event(self):
+        self.stopped = True
+
+    def clear_result(self):
+        pass
+
+    def get_result(self):
+        return None
+
+    def is_stopped(self):
+        return self.stopped
+
+    def plain_result(self, text):
+        return text
 
 
 def _install_astrbot_stubs():
@@ -82,6 +114,12 @@ plugin_module = importlib.import_module("main")
 class GroupDebouncerRegressionTests(unittest.TestCase):
     def make_plugin(self, **config):
         return plugin_module.GroupDebouncer(context=None, config=config)
+
+    async def consume(self, plugin, event):
+        results = []
+        async for item in plugin.on_group_message(event):
+            results.append(item)
+        return results
 
     def test_target_time_refreshes_when_reset_timer_is_enabled(self):
         plugin = self.make_plugin(reset_timer=True)
@@ -151,12 +189,38 @@ class GroupDebouncerRegressionTests(unittest.TestCase):
         self.assertFalse(plugin._debounce_group_allowed("blocked"))
         self.assertFalse(plugin._debounce_group_allowed("outside"))
 
-    def test_heartflow_compatibility_uses_conservative_behavior(self):
+    def test_heartflow_compatibility_keeps_first_message_bypass_disabled(self):
         plugin = self.make_plugin(heartflow_compat_mode=True, first_message_no_debounce=True)
 
         self.assertTrue(plugin.config.heartflow_compat_mode)
-        self.assertFalse(plugin._should_attempt_repeat())
+        self.assertTrue(plugin._should_attempt_repeat())
         self.assertFalse(plugin._should_bypass_first_message())
+
+    def test_heartflow_compatibility_still_repeats_when_repeat_is_enabled(self):
+        plugin = self.make_plugin(
+            heartflow_compat_mode=True,
+            repeat_enabled=True,
+            repeat_probability=1.0,
+            repeat_cooldown_seconds=0,
+        )
+        first = Event([Plain("same")], text="same", sender_id="u1")
+        second = Event([Plain("same")], text="same", sender_id="u2")
+
+        self.assertIsNone(plugin._try_build_repeat_response(first, "group", "same", now=10.0))
+        self.assertEqual(plugin._try_build_repeat_response(second, "group", "same", now=11.0), "same")
+
+    def test_separate_image_then_text_preserves_image_on_text_event(self):
+        plugin = self.make_plugin(heartflow_compat_mode=True, window_seconds=0.3)
+        image = Image()
+        image_event = Event([image], text="")
+        text_event = Event([Plain("caption")], text="caption")
+
+        asyncio.run(self.consume(plugin, image_event))
+        asyncio.run(self.consume(plugin, text_event))
+
+        self.assertFalse(image_event.stopped)
+        self.assertEqual(text_event.message_str, "caption")
+        self.assertIn(image, text_event.message_obj.message)
 
     def test_heartflow_compatibility_forces_strict_at_matching(self):
         plugin = self.make_plugin(heartflow_compat_mode=True, strict_at_match=False)

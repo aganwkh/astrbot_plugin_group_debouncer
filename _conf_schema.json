@@ -69,7 +69,7 @@
     "description": "Heartflow 兼容模式",
     "type": "bool",
     "default": true,
-    "hint": "开启后关闭本插件复读，并禁止冷场首条直通，让 Heartflow 只看到合并后的稳定事件"
+    "hint": "开启后禁止冷场首条直通，并强制使用保守的 @ 匹配和组件保留策略；复读是否启用只看 repeat_enabled"
   },
   "bot_aliases": {
     "description": "Bot别名",
