@@ -842,6 +842,25 @@ class GroupDebouncer(Star):
         except Exception as e:
             logger.info(f"[GroupDebouncer:DEBUG] {tag} | key={key} | buffer_snapshot_failed={e!r}")
 
+    @filter.after_message_sent()
+    async def on_after_message_sent(self, event: AstrMessageEvent):
+        if not self.config.repeat_enabled:
+            return
+
+        result = self._safe_call_event_method(event, "get_result", None)
+        chain = getattr(result, "chain", None)
+        if not chain:
+            return
+
+        text = "".join(str(getattr(c, "text", "")) for c in chain if isinstance(c, Plain)).strip()
+        if not text:
+            return
+
+        session_id = self._get_session_id(event)
+        state = self._get_repeat_state(session_id)
+        state.cleanup(self.config.repeat_repeated_text_ttl_seconds)
+        state.repeated_texts[self._normalize_repeat_text(text)] = time.time()
+
     # 关键：priority 必须高于 Heartflow。Heartflow 当前常见为 priority=1000，所以这里用 2000。
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=2000)
     async def on_group_message(self, event: AstrMessageEvent):

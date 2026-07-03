@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.2 - 2026-07-03
+
+- Prevented the repeat feature from echoing the bot's own freshly sent replies when humans repeat them.
+
 ## 2.4.1 - 2026-07-02
 
 - Fixed repeat handling so `repeat_enabled=true` works even when `heartflow_compat_mode=true`.

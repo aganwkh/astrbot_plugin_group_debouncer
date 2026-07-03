@@ -27,8 +27,13 @@ class Message:
         self.self_id = self_id
 
 
+class Result:
+    def __init__(self, chain):
+        self.chain = chain
+
+
 class Event:
-    def __init__(self, components, self_id=None, text="", session_id="group", sender_id="sender"):
+    def __init__(self, components, self_id=None, text="", session_id="group", sender_id="sender", result=None):
         self.message_obj = Message(components, self_id=self_id)
         self.message_obj.session_id = session_id
         self.message_obj.sender_id = sender_id
@@ -36,6 +41,7 @@ class Event:
         self.unified_msg_origin = session_id
         self._sender_id = sender_id
         self.stopped = False
+        self._result = result
 
     def is_private_chat(self):
         return False
@@ -56,7 +62,7 @@ class Event:
         pass
 
     def get_result(self):
-        return None
+        return self._result
 
     def is_stopped(self):
         return self.stopped
@@ -83,11 +89,15 @@ def _install_astrbot_stubs():
     def event_message_type(*_args, **_kwargs):
         return lambda func: func
 
+    def after_message_sent(*_args, **_kwargs):
+        return lambda func: func
+
     api.logger = Logger()
     event.AstrMessageEvent = object
     event.filter = types.SimpleNamespace(
         EventMessageType=types.SimpleNamespace(GROUP_MESSAGE="group"),
         event_message_type=event_message_type,
+        after_message_sent=after_message_sent,
     )
     star.Context = object
     star.Star = Star
@@ -208,6 +218,21 @@ class GroupDebouncerRegressionTests(unittest.TestCase):
 
         self.assertIsNone(plugin._try_build_repeat_response(first, "group", "same", now=10.0))
         self.assertEqual(plugin._try_build_repeat_response(second, "group", "same", now=11.0), "same")
+
+    def test_bot_sent_text_is_not_repeated_back_after_human_echoes(self):
+        plugin = self.make_plugin(
+            repeat_enabled=True,
+            repeat_probability=1.0,
+            repeat_cooldown_seconds=0,
+        )
+        sent = Event([], text="", result=Result([Plain("bot said this")]))
+        first_echo = Event([Plain("bot said this")], text="bot said this", sender_id="u1")
+        second_echo = Event([Plain("bot said this")], text="bot said this", sender_id="u2")
+
+        asyncio.run(plugin.on_after_message_sent(sent))
+
+        self.assertIsNone(plugin._try_build_repeat_response(first_echo, "group", "bot said this", now=10.0))
+        self.assertIsNone(plugin._try_build_repeat_response(second_echo, "group", "bot said this", now=11.0))
 
     def test_separate_image_then_text_preserves_image_on_text_event(self):
         plugin = self.make_plugin(heartflow_compat_mode=True, window_seconds=0.3)
