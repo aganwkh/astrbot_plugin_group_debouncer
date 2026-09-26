@@ -404,6 +404,35 @@ class RawSegmentSyncTests(unittest.TestCase):
             [self.TEXT_SEG],
         )
 
+    def test_last_raw_segments_do_not_leak_when_raw_unavailable(self):
+        """后一条消息拿不到原始段时，不得沿用前一条的 image 段。
+
+        否则注入后 raw 里有 image、组件里也有 image，看似齐全，实际是两个
+        不同来源拼起来的，下游按 file/url 匹配就会错位。
+        """
+        plugin = self.make_plugin()
+        buffer = plugin_module.MessageBuffer("group", "sender", "Sender")
+        image = Image()
+        buffer.add("", [image], 300, "Sender", False,
+                   raw_segments=[self.STICKER_SEG])
+        # 第二条：有组件但拿不到原始段
+        second = Image()
+        buffer.add("hi", [Plain("hi"), second], 300, "Sender", False,
+                   raw_segments=None)
+
+        self.assertEqual(buffer.last_components[-1], second)
+        self.assertEqual(buffer.last_raw_non_text_segments, [])
+
+    def test_component_segment_type_matches_onebot_names(self):
+        """组件类型名必须解析成 OneBot 段类型（image/at/...），不能是类名。"""
+
+        class FakeImage:
+            class type:  # noqa: N801 - 模拟 AstrBot 的 ComponentType 枚举
+                value = "image"
+
+        self.assertEqual(plugin_module._component_segment_type(FakeImage()), "image")
+        self.assertEqual(plugin_module._component_segment_type(Image()), "image")
+
 
 if __name__ == "__main__":
     unittest.main()

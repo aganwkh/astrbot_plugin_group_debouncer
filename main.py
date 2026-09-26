@@ -36,6 +36,19 @@ _URL_RE = re.compile(r"(?:https?://|www\.|[A-Za-z0-9._%+-]+\.[A-Za-z]{2,})(?:\S*
 _TEXT_SEGMENT_TYPES = frozenset({"text", "plain"})
 
 
+def _component_segment_type(comp) -> str:
+    """取组件对应的 OneBot 段类型名。
+
+    优先用 AstrBot 自己的 ComponentType（其值就是 OneBot 类型串），
+    取不到再退回类名小写。
+    """
+    value = getattr(comp, "type", None)
+    value = getattr(value, "value", value)
+    if isinstance(value, str) and value:
+        return value.lower()
+    return comp.__class__.__name__.lower()
+
+
 def _extract_raw_segments(event) -> Optional[list]:
     """取出事件的原始 OneBot 段列表；平台不提供时返回 None。
 
@@ -300,14 +313,17 @@ class MessageBuffer:
         # 收集非纯文本组件，但默认只把文本合并注入。
         non_plain_components = [c for c in comps if not isinstance(c, Plain)]
         self.components.extend(non_plain_components)
-        if non_plain_components:
-            self.last_components = non_plain_components
         self.all_non_plain_components.extend(non_plain_components)
 
-        # 原始非文本段：只保留仍存在于本条消息中的类型，避免把已被上游
+        # 原始非文本段：只保留仍存在于本条消息中的段类型，避免把已被上游
         # 丢弃（如 mface）的段凭空带回，让 raw 与组件始终对得上。
+        #
+        # ⚠️ last_* 必须成对更新：只更新组件不更新原始段（或反之）会让两者
+        # 错位——例如本条拿不到原始段却沿用了上一条的 image 段，注入后
+        # raw 里的段和组件对不上，下游照样判定失败。所以只要本条更新了
+        # last_components，就同步更新 last_raw_non_text_segments。
         if raw_segments is not None:
-            present = {c.__class__.__name__.lower() for c in non_plain_components}
+            present = {_component_segment_type(c) for c in non_plain_components}
             raw_non_text = [
                 seg
                 for seg in raw_segments
@@ -316,9 +332,14 @@ class MessageBuffer:
                 and str(seg.get("type") or "").lower() in present
             ]
             self.raw_non_text_segments.extend(raw_non_text)
-            if raw_non_text:
-                self.last_raw_non_text_segments = raw_non_text
             self.all_raw_non_text_segments.extend(raw_non_text)
+            if non_plain_components:
+                self.last_components = non_plain_components
+                self.last_raw_non_text_segments = raw_non_text
+        elif non_plain_components:
+            # 拿不到原始段：组件仍要保留，但原始段不能沿用旧值，否则两者错位。
+            self.last_components = non_plain_components
+            self.last_raw_non_text_segments = []
 
         self.last_update = now
 
