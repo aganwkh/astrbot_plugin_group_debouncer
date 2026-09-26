@@ -22,9 +22,13 @@ class Image:
 
 
 class Message:
-    def __init__(self, components, self_id=None):
+    def __init__(self, components, self_id=None, raw_segments=None):
         self.message = components
         self.self_id = self_id
+        # raw_message 用 dict 形态即可覆盖 aiocqhttp 的 Event(dict) 语义。
+        self.raw_message = (
+            {"message": list(raw_segments)} if raw_segments is not None else None
+        )
 
 
 class Result:
@@ -33,8 +37,8 @@ class Result:
 
 
 class Event:
-    def __init__(self, components, self_id=None, text="", session_id="group", sender_id="sender", result=None):
-        self.message_obj = Message(components, self_id=self_id)
+    def __init__(self, components, self_id=None, text="", session_id="group", sender_id="sender", result=None, raw_segments=None):
+        self.message_obj = Message(components, self_id=self_id, raw_segments=raw_segments)
         self.message_obj.session_id = session_id
         self.message_obj.sender_id = sender_id
         self.message_str = text
@@ -286,6 +290,119 @@ class GroupDebouncerRegressionTests(unittest.TestCase):
         runtime_fields = set(plugin_module.DebouncerConfig.model_fields)
 
         self.assertSetEqual(set(schema), runtime_fields)
+
+
+class RawSegmentSyncTests(unittest.TestCase):
+    """合并注入必须让 raw_message 与组件链保持一致。
+
+    回归背景：Image 组件只有 file/url/path，不带 sub_type/summary，下游判定
+    表情包只能读 raw_message 的原始 OneBot 段。合并注入后 raw_message 若仍停在
+    「窗口内最后一条消息」上，则「表情包在前、文字在后」时 raw 里一个 image 段
+    都没有，表情包被当成普通图片转述后送进主模型。
+    """
+
+    STICKER_SEG = {
+        "type": "image",
+        "data": {
+            "file": "sticker.image",
+            "url": "https://gxh.vip.qq.com/club/item/parcel/item/ab/cd/1040.png",
+            "sub_type": 1,
+            "summary": "[表情]",
+        },
+    }
+    TEXT_SEG = {"type": "text", "data": {"text": "hello"}}
+
+    def make_plugin(self, **config):
+        return plugin_module.GroupDebouncer(context=None, config=config)
+
+    def _buffer_with(self, plugin, entries, key="group::sender"):
+        buffer = plugin_module.MessageBuffer("group", "sender", "Sender")
+        for comps, text, raw in entries:
+            buffer.add(text, comps, 300, "Sender", False,
+                       raw_segments=raw)
+        return buffer
+
+    def test_raw_segments_travel_with_preserved_last_component(self):
+        plugin = self.make_plugin()
+        image = Image()
+        buffer = self._buffer_with(plugin, [
+            ([image], "", [self.STICKER_SEG]),
+            ([Plain("hello")], "hello", [self.TEXT_SEG]),
+        ])
+        event = Event([Plain("hello")], raw_segments=[self.TEXT_SEG])
+
+        plugin._inject_merged_text(event, "hello", buffer)
+
+        raw_segments = event.message_obj.raw_message["message"]
+        self.assertIn(self.STICKER_SEG, raw_segments)
+        self.assertEqual(raw_segments[0]["data"]["text"], "hello")
+
+    def test_raw_segments_travel_with_preserve_all_strategy(self):
+        plugin = self.make_plugin(
+            heartflow_compat_mode=False,
+            inject_strategy="preserve_all_non_plain",
+        )
+        image = Image()
+        buffer = self._buffer_with(plugin, [
+            ([image], "", [self.STICKER_SEG]),
+            ([Plain("hello")], "hello", [self.TEXT_SEG]),
+        ])
+        event = Event([Plain("hello")], raw_segments=[self.TEXT_SEG])
+
+        plugin._inject_merged_text(event, "hello", buffer)
+
+        self.assertIn(self.STICKER_SEG, event.message_obj.raw_message["message"])
+
+    def test_plain_replace_drops_raw_segments_too(self):
+        plugin = self.make_plugin(
+            heartflow_compat_mode=False, inject_strategy="plain_replace")
+        image = Image()
+        buffer = self._buffer_with(plugin, [([image], "", [self.STICKER_SEG])])
+        event = Event([Plain("hello")], raw_segments=[self.TEXT_SEG])
+
+        plugin._inject_merged_text(event, "hello", buffer)
+
+        raw_segments = event.message_obj.raw_message["message"]
+        self.assertEqual([s["type"] for s in raw_segments], ["text"])
+
+    def test_text_segments_are_not_carried_into_raw(self):
+        plugin = self.make_plugin()
+        buffer = self._buffer_with(plugin, [([Plain("hello")], "hello", [self.TEXT_SEG])])
+        event = Event([Plain("hello")], raw_segments=[self.TEXT_SEG])
+
+        plugin._inject_merged_text(event, "hello", buffer)
+
+        raw_segments = event.message_obj.raw_message["message"]
+        self.assertEqual(len(raw_segments), 1)
+        self.assertEqual(raw_segments[0]["type"], "text")
+
+    def test_missing_raw_message_is_tolerated(self):
+        plugin = self.make_plugin()
+        event = Event([Plain("hello")])
+        buffer = self._buffer_with(plugin, [([Plain("hello")], "hello", None)])
+
+        plugin._inject_merged_text(event, "hello", buffer)
+
+        self.assertEqual(event.message_obj.message[0].text, "hello")
+        self.assertIsNone(event.message_obj.raw_message)
+
+    def test_non_list_raw_message_is_left_untouched(self):
+        plugin = self.make_plugin()
+        event = Event([Plain("hello")])
+        event.message_obj.raw_message = {"message": "not-a-list"}
+        buffer = self._buffer_with(plugin, [([Plain("hello")], "hello", None)])
+
+        plugin._inject_merged_text(event, "hello", buffer)
+
+        self.assertEqual(event.message_obj.raw_message["message"], "not-a-list")
+
+    def test_extract_raw_segments_distinguishes_missing_from_empty(self):
+        self.assertIsNone(plugin_module._extract_raw_segments(Event([Plain("hi")])))
+        self.assertEqual(
+            plugin_module._extract_raw_segments(
+                Event([Plain("hi")], raw_segments=[self.TEXT_SEG])),
+            [self.TEXT_SEG],
+        )
 
 
 if __name__ == "__main__":

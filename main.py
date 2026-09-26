@@ -32,6 +32,22 @@ from astrbot.core.message.components import Plain
 
 _URL_RE = re.compile(r"(?:https?://|www\.|[A-Za-z0-9._%+-]+\.[A-Za-z]{2,})(?:\S*)", re.I)
 
+# OneBot 文本段类型。合并注入时正文统一由 merged_text 承载，其余段原样带回。
+_TEXT_SEGMENT_TYPES = frozenset({"text", "plain"})
+
+
+def _extract_raw_segments(event) -> Optional[list]:
+    """取出事件的原始 OneBot 段列表；平台不提供时返回 None。
+
+    None 与 [] 语义不同：None 表示「拿不到原始数据，别动它」，
+    [] 表示「确实没有非文本段」。
+    """
+    raw = getattr(getattr(event, "message_obj", None), "raw_message", None)
+    if raw is None:
+        return None
+    message = raw.get("message") if isinstance(raw, dict) else getattr(raw, "message", None)
+    return message if isinstance(message, list) else None
+
 
 class DebouncerConfig(BaseModel):
     """防抖插件配置模型"""
@@ -251,11 +267,25 @@ class MessageBuffer:
         self.components: List[object] = []
         self.last_components: List[object] = []
         self.all_non_plain_components: List[object] = []
+        # 与 components 平行的原始 OneBot 非文本段。下游插件（群聊上下文、
+        # 表情包小偷等）判定表情包必须读原始段里的 sub_type/summary，
+        # 而 Image 组件不带这些字段，所以注入时必须把它们一并带回去。
+        self.raw_non_text_segments: List[dict] = []
+        self.last_raw_non_text_segments: List[dict] = []
+        self.all_raw_non_text_segments: List[dict] = []
         self.last_update: float = 0.0
         self.target_time: float = 0.0
         self.direct_trigger: bool = False
 
-    def add(self, text: str, comps: list, expire_sec: int, sender_name: str, direct_trigger: bool):
+    def add(
+        self,
+        text: str,
+        comps: list,
+        expire_sec: int,
+        sender_name: str,
+        direct_trigger: bool,
+        raw_segments: Optional[list] = None,
+    ):
         now = time.time()
 
         if self.last_update > 0 and (now - self.last_update) > expire_sec:
@@ -274,6 +304,22 @@ class MessageBuffer:
             self.last_components = non_plain_components
         self.all_non_plain_components.extend(non_plain_components)
 
+        # 原始非文本段：只保留仍存在于本条消息中的类型，避免把已被上游
+        # 丢弃（如 mface）的段凭空带回，让 raw 与组件始终对得上。
+        if raw_segments is not None:
+            present = {c.__class__.__name__.lower() for c in non_plain_components}
+            raw_non_text = [
+                seg
+                for seg in raw_segments
+                if isinstance(seg, dict)
+                and str(seg.get("type") or "").lower() not in _TEXT_SEGMENT_TYPES
+                and str(seg.get("type") or "").lower() in present
+            ]
+            self.raw_non_text_segments.extend(raw_non_text)
+            if raw_non_text:
+                self.last_raw_non_text_segments = raw_non_text
+            self.all_raw_non_text_segments.extend(raw_non_text)
+
         self.last_update = now
 
     def clear(self):
@@ -281,6 +327,9 @@ class MessageBuffer:
         self.components.clear()
         self.last_components.clear()
         self.all_non_plain_components.clear()
+        self.raw_non_text_segments.clear()
+        self.last_raw_non_text_segments.clear()
+        self.all_raw_non_text_segments.clear()
         self.last_update = 0.0
         self.target_time = 0.0
         self.direct_trigger = False
@@ -461,13 +510,68 @@ class GroupDebouncer(Star):
             strategy = self._effective_inject_strategy()
             if strategy == "preserve_all_non_plain" and buffer is not None:
                 non_plain_components = buffer.all_non_plain_components
+                raw_non_text = buffer.all_raw_non_text_segments
             elif strategy == "preserve_last_non_plain" and buffer is not None:
                 non_plain_components = buffer.last_components
+                raw_non_text = buffer.last_raw_non_text_segments
             else:
                 non_plain_components = []
+                raw_non_text = []
             event.message_obj.message = [Plain(merged_text), *non_plain_components]
         except Exception as e:
             logger.warning(f"[GroupDebouncer] 注入合并消息链失败: {e}")
+            return
+
+        self._sync_raw_message_segments(event, merged_text, raw_non_text)
+
+    def _sync_raw_message_segments(
+        self,
+        event: AstrMessageEvent,
+        merged_text: str,
+        raw_non_text: Optional[list],
+    ):
+        """让 raw_message 的段与注入后的组件保持一致。
+
+        为什么必须做：Image 组件只有 file/url/path，**不带** sub_type/summary，
+        表情包判定只能翻 raw_message 的原始 OneBot 段。合并注入后 raw_message
+        仍停留在「窗口内最后一条消息」上，于是「表情包在前、文字在后」时
+        raw 里连一个 image 段都没有，下游一律判定为普通图片 → 完整转述 →
+        主模型对着表情包聊天。
+
+        这里把非文本原始段补回 raw_message。文本正文由 merged_text 承载，
+        其余段按原顺序保留，不改变任何字段内容。
+        """
+        try:
+            raw = getattr(getattr(event, "message_obj", None), "raw_message", None)
+            if raw is None:
+                return
+
+            # 只在原始数据本来就是「段列表」形态（OneBot 约定）时才同步，
+            # 其它平台（message 是字符串 / 压根没有该字段）一律不动。
+            if isinstance(raw, dict):
+                current = raw.get("message")
+            else:
+                current = getattr(raw, "message", None)
+            if not isinstance(current, list):
+                return
+
+            segments: list = [{"type": "text", "data": {"text": merged_text}}]
+            segments.extend(
+                seg for seg in (raw_non_text or []) if isinstance(seg, dict)
+            )
+
+            if isinstance(raw, dict):
+                raw["message"] = segments
+                return
+
+            # aiocqhttp 的 Event 是 dict 子类（走上面那支）；这里兜底其它
+            # 对象形态的实现。
+            try:
+                setattr(raw, "message", segments)
+            except Exception as e:
+                logger.debug(f"[GroupDebouncer] 无法同步 raw_message 段: {e!r}")
+        except Exception as e:
+            logger.debug(f"[GroupDebouncer] 同步 raw_message 段失败: {e!r}")
 
     def _get_self_id(self, event: AstrMessageEvent) -> Optional[str]:
         for attr in ("get_self_id", "get_bot_id"):
@@ -902,7 +1006,14 @@ class GroupDebouncer(Star):
 
         if not text:
             buffer = self._get_buffer(debounce_key, session_id, sender_id, sender_name)
-            buffer.add("", event.message_obj.message, self.config.buffer_expire_seconds, sender_name, False)
+            buffer.add(
+                "",
+                event.message_obj.message,
+                self.config.buffer_expire_seconds,
+                sender_name,
+                False,
+                raw_segments=_extract_raw_segments(event),
+            )
             self._debug_buffer_snapshot("buffer_non_text_component", debounce_key, buffer)
             return
 
@@ -953,7 +1064,14 @@ class GroupDebouncer(Star):
                 direct_trigger=direct_trigger,
                 window_seconds=window_seconds,
             )
-            buffer.add(text, event.message_obj.message, self.config.buffer_expire_seconds, sender_name, direct_trigger)
+            buffer.add(
+                text,
+                event.message_obj.message,
+                self.config.buffer_expire_seconds,
+                sender_name,
+                direct_trigger,
+                raw_segments=_extract_raw_segments(event),
+            )
 
             current_id = self.counters.get(debounce_key, 0) + 1
             self.counters[debounce_key] = current_id
